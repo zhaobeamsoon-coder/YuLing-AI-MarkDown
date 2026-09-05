@@ -21,7 +21,12 @@ from tools.repository_boundary_check import (
 
 EXPECTED_EMAIL = "231622334+zhaobeamsoon-coder@users.noreply.github.com"
 EXPECTED_NAME = "Zhao Yan"
-ALLOWED_GITHUB_COMMITTERS = {EXPECTED_EMAIL, "noreply@github.com"}
+APPROVED_PUBLIC_EMAIL = "zhao.beamsoon@gmail.com"
+APPROVED_COMMIT_IDENTITIES = {
+    (EXPECTED_NAME, EXPECTED_EMAIL),
+    ("zhaobeamsoon-coder", APPROVED_PUBLIC_EMAIL),
+}
+ALLOWED_GITHUB_COMMITTERS = {EXPECTED_EMAIL, APPROVED_PUBLIC_EMAIL, "noreply@github.com"}
 ALLOWED_EMAIL_SUFFIXES = ("@example.com", "@yuling.invalid", "@users.noreply.github.com")
 ALLOWED_ASSET_EMAIL_SUFFIXES = ("@1x.png", "@2x.png", "@3x.png")
 ALLOWED_HOME_NAMES = {"test", "tester", "example", "user"}
@@ -38,7 +43,7 @@ SECRET_PATTERNS = (
 
 def email_is_allowed(email: str) -> bool:
     normalized = email.lower()
-    return normalized == "noreply@github.com" or normalized.endswith(
+    return normalized in {APPROVED_PUBLIC_EMAIL, "noreply@github.com"} or normalized.endswith(
         (*ALLOWED_EMAIL_SUFFIXES, *ALLOWED_ASSET_EMAIL_SUFFIXES)
     )
 
@@ -151,13 +156,23 @@ def history_violations(
         return [f"cannot inspect public history: {error}"]
     if len(roots) != 1:
         problems.append(f"public history must descend from one sanitized root, found {len(roots)} roots")
+    approved_authors = (
+        APPROVED_COMMIT_IDENTITIES
+        if expected_email == EXPECTED_EMAIL and expected_name == EXPECTED_NAME
+        else {(expected_name, expected_email)}
+    )
+    allowed_committers = (
+        ALLOWED_GITHUB_COMMITTERS
+        if expected_email == EXPECTED_EMAIL
+        else {expected_email, "noreply@github.com"}
+    )
     unexpected_email = False
     unexpected_name = False
     for identity in identities:
         author_name, author_email, committer_name, committer_email = identity.split("\0")
-        if author_email != expected_email or committer_email not in ALLOWED_GITHUB_COMMITTERS:
+        if author_email not in {email for _, email in approved_authors} or committer_email not in allowed_committers:
             unexpected_email = True
-        if expected_name is not None and author_name != expected_name:
+        if (author_name, author_email) not in approved_authors:
             unexpected_name = True
     if unexpected_email:
         problems.append("unexpected commit email in public history")

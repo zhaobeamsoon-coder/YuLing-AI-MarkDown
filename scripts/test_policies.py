@@ -104,6 +104,9 @@ class ProjectPolicyTests(unittest.TestCase):
         self.assertEqual(history_violations(repo, expected, "Zhao Yan"), [])
         self.assertTrue(any("unexpected commit email" in problem for problem in history_violations(repo, "other@users.noreply.github.com")))
 
+        public_email_repo = self.make_repo("zhao.beamsoon@gmail.com", "zhaobeamsoon-coder")
+        self.assertEqual(history_violations(public_email_repo), [])
+
         empty_tree = subprocess.check_output(["git", "mktree"], cwd=repo, input=b"").decode().strip()
         second_root = subprocess.check_output(
             ["git", "commit-tree", empty_tree, "-m", "unrelated root"], cwd=repo, text=True

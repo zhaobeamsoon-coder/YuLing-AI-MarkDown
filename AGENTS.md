@@ -233,9 +233,11 @@ inline.
   refs must never be pushed. Sanitized `codex/*` branches may be pushed only for
   pull requests after the exact outbound commits pass the privacy gate. Never use
   `git push --all`, `--mirror`, or an unreviewed tag push.
-- Public commits use the approved GitHub noreply identity. Real workstation
-  email addresses, hostnames, home-directory names, internal repository names,
-  customer names, and private infrastructure identifiers are forbidden.
+- Public commits use an explicitly allowlisted identity. The GitHub noreply
+  identity remains the default; the maintainer's separately approved public
+  GitHub email is also allowed. Other workstation email addresses, hostnames,
+  home-directory names, internal repository names, customer names, and private
+  infrastructure identifiers are forbidden.
 - User Markdown, pasted images, chats, indexes, databases, AppLocalData, caches,
   logs, diagnostics, environment files, credentials, certificates, signing
   material, build outputs, dumps, archives, and unknown binaries are excluded by
