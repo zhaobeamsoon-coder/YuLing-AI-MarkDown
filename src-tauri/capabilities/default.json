@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-capability",
+  "description": "YuLing MD main window permissions",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "fs:allow-watch",
+    "fs:allow-unwatch",
+    "clipboard-manager:allow-write-text",
+    "clipboard-manager:allow-write-html"
+  ]
+}

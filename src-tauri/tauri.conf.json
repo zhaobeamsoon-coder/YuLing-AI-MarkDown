@@ -1,0 +1,60 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "YuLing MD",
+  "version": "0.1.0",
+  "identifier": "ai.yuling.md",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "YuLing MD · 毓灵 Markdown 编辑器",
+        "width": 1360,
+        "height": 860,
+        "minWidth": 920,
+        "minHeight": 640,
+        "center": true,
+        "theme": "Light"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' asset: http://asset.localhost; img-src 'self' asset: http://asset.localhost data: blob: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https: http://localhost:* http://127.0.0.1:*",
+      "assetProtocol": {
+        "enable": true,
+        "scope": []
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Productivity",
+    "shortDescription": "安静、智能的 Markdown 编辑器",
+    "longDescription": "YuLing MD 是毓灵 AI 推出的本地优先 Markdown 编辑器。",
+    "fileAssociations": [
+      {
+        "ext": ["md"],
+        "contentTypes": ["net.daringfireball.markdown", "public.plain-text"],
+        "name": "Markdown 文档",
+        "role": "Editor",
+        "rank": "Default",
+        "mimeType": "text/markdown"
+      }
+    ],
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "signingIdentity": "-"
+    }
+  }
+}

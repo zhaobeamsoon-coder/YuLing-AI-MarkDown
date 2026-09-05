@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "YuLing localStorage key is a public identifier, not a credential"
+regexTarget = "match"
+regexes = [
+  '''recentKey = "yuling-md-recent-v1"''',
+]
