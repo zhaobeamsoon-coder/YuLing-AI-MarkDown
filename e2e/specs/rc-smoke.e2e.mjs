@@ -10,7 +10,12 @@ async function libraryText() {
 
 async function waitForLibraryText(name, present = true) {
   await browser.waitUntil(async () => (await libraryText()).includes(name) === present, {
-    timeout: 2_500,
+    // 10s 而非 2.5s:2.5s 是全文件最短的一档(其余 4~10s),而这两个 helper 等的是
+    // 「外部文件系统事件 → 原生 watcher → 前端刷新」整条链,CI 上的 macOS runner
+    // 明显慢于本机。2026-09-05 实测:同一台 M5 Max 上同一份代码,e2e 全程在 8.1s 与
+    // 37s 之间抖动(6 次连跑),而 CI 已因此假红三次(run 33956481631/33956942396/33959239963)。
+    // 假红与假绿同样有害 —— 它训练人忽略红灯。
+    timeout: 10_000,
     interval: 50,
     timeoutMsg: `${name} did not become ${present ? "visible" : "hidden"} in the document library`,
   });
@@ -24,7 +29,12 @@ async function folderIsVisible(name) {
 
 async function waitForFolder(name, present = true) {
   await browser.waitUntil(async () => (await folderIsVisible(name)) === present, {
-    timeout: 2_500,
+    // 10s 而非 2.5s:2.5s 是全文件最短的一档(其余 4~10s),而这两个 helper 等的是
+    // 「外部文件系统事件 → 原生 watcher → 前端刷新」整条链,CI 上的 macOS runner
+    // 明显慢于本机。2026-09-05 实测:同一台 M5 Max 上同一份代码,e2e 全程在 8.1s 与
+    // 37s 之间抖动(6 次连跑),而 CI 已因此假红三次(run 33956481631/33956942396/33959239963)。
+    // 假红与假绿同样有害 —— 它训练人忽略红灯。
+    timeout: 10_000,
     interval: 50,
     timeoutMsg: `${name} did not become ${present ? "visible" : "hidden"} in the document tree`,
   });
