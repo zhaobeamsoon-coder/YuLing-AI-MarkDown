@@ -1,8 +1,5 @@
 use crate::error::{AppError, AppResult};
-use crate::export_paths::ExportState;
-use chrono::{Datelike, Local};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::Write;
@@ -63,14 +60,6 @@ pub struct DocumentContent {
     pub modified_ms: u64,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AssetImport {
-    pub absolute_path: String,
-    pub markdown_path: String,
-    pub reused: bool,
-}
-
 fn validate_markdown_relative_path(relative_path: &str) -> AppResult<PathBuf> {
     let relative = PathBuf::from(relative_path);
     if relative.as_os_str().is_empty()
@@ -91,9 +80,13 @@ fn validate_directory_relative_path(relative_path: &str) -> AppResult<PathBuf> {
     let relative = PathBuf::from(relative_path);
     if relative.as_os_str().is_empty()
         || relative.is_absolute()
-        || relative.components().any(|part| !matches!(part, Component::Normal(_)) || part.as_os_str() == ".yulingmd")
+        || relative
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)) || part.as_os_str() == ".yulingmd")
     {
-        return Err(AppError::Invalid("只允许操作工作区内的相对目录".to_string()));
+        return Err(AppError::Invalid(
+            "只允许操作工作区内的相对目录".to_string(),
+        ));
     }
     Ok(relative)
 }
@@ -127,7 +120,9 @@ fn available_markdown_destination(root: &Path, relative_path: &str) -> AppResult
 
 fn existing_directory_path(root: &Path, relative_path: &str) -> AppResult<PathBuf> {
     let root = root.canonicalize()?;
-    let path = root.join(validate_directory_relative_path(relative_path)?).canonicalize()?;
+    let path = root
+        .join(validate_directory_relative_path(relative_path)?)
+        .canonicalize()?;
     if path == root || !path.starts_with(&root) || !path.is_dir() {
         return Err(AppError::Unauthorized(path.display().to_string()));
     }
@@ -160,7 +155,7 @@ fn modified_ms(path: &Path) -> AppResult<u64> {
         .as_millis() as u64)
 }
 
-fn authorized_root(state: &WorkspaceState, path: &Path) -> AppResult<PathBuf> {
+pub(crate) fn authorized_root(state: &WorkspaceState, path: &Path) -> AppResult<PathBuf> {
     let canonical = path
         .canonicalize()
         .map_err(|_| AppError::Unauthorized(path.display().to_string()))?;
@@ -170,25 +165,6 @@ fn authorized_root(state: &WorkspaceState, path: &Path) -> AppResult<PathBuf> {
         .find(|root| canonical.starts_with(root))
         .cloned()
         .ok_or_else(|| AppError::Unauthorized(canonical.display().to_string()))
-}
-
-fn safe_file_name(original: &str) -> String {
-    let candidate: String = original
-        .chars()
-        .map(|character| {
-            if character.is_alphanumeric() || matches!(character, '.' | '-' | '_') {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    let trimmed = candidate.trim_matches(['.', '-']);
-    if trimmed.is_empty() {
-        "image.png".to_string()
-    } else {
-        trimmed.chars().take(90).collect()
-    }
 }
 
 pub(crate) fn atomic_write(path: &Path, content: &[u8]) -> AppResult<()> {
@@ -278,7 +254,13 @@ pub async fn list_directories(
             .filter_entry(|entry| entry.file_name() != ".yulingmd")
             .filter_map(Result::ok)
             .filter(|entry| entry.file_type().is_dir())
-            .filter_map(|entry| entry.path().strip_prefix(&root).ok().map(|path| path.to_string_lossy().replace('\\', "/")))
+            .filter_map(|entry| {
+                entry
+                    .path()
+                    .strip_prefix(&root)
+                    .ok()
+                    .map(|path| path.to_string_lossy().replace('\\', "/"))
+            })
             .collect::<Vec<_>>();
         directories.sort();
         Ok(directories)
@@ -417,7 +399,10 @@ pub fn create_directory(
     if destination.exists() {
         return Err(AppError::Invalid("目录已经存在".to_string()));
     }
-    let parent = destination.parent().ok_or_else(|| AppError::Invalid("目录没有父级".to_string()))?.canonicalize()?;
+    let parent = destination
+        .parent()
+        .ok_or_else(|| AppError::Invalid("目录没有父级".to_string()))?
+        .canonicalize()?;
     if !parent.starts_with(&root) {
         return Err(AppError::Unauthorized(parent.display().to_string()));
     }
@@ -434,11 +419,18 @@ pub fn move_directory(
 ) -> AppResult<()> {
     let root = authorized_root(&state, &PathBuf::from(workspace))?;
     let source = existing_directory_path(&root, &source_relative_path)?;
-    let destination = root.join(validate_directory_relative_path(&destination_relative_path)?);
+    let destination = root.join(validate_directory_relative_path(
+        &destination_relative_path,
+    )?);
     if destination.exists() || destination.starts_with(&source) {
-        return Err(AppError::Invalid("不能覆盖目录或把目录移入自身".to_string()));
+        return Err(AppError::Invalid(
+            "不能覆盖目录或把目录移入自身".to_string(),
+        ));
     }
-    let parent = destination.parent().ok_or_else(|| AppError::Invalid("目标目录没有父级".to_string()))?.canonicalize()?;
+    let parent = destination
+        .parent()
+        .ok_or_else(|| AppError::Invalid("目标目录没有父级".to_string()))?
+        .canonicalize()?;
     if !parent.starts_with(&root) {
         return Err(AppError::Unauthorized(parent.display().to_string()));
     }
@@ -490,104 +482,13 @@ pub fn trash_document(
     })
 }
 
-#[tauri::command]
-pub fn import_asset(
-    state: State<'_, WorkspaceState>,
-    workspace: String,
-    bytes: Vec<u8>,
-    original_name: String,
-) -> AppResult<AssetImport> {
-    let root = authorized_root(&state, &PathBuf::from(workspace))?;
-    let now = Local::now();
-    let digest = hex::encode(Sha256::digest(&bytes));
-    let file_name = format!("{}-{}", &digest[..10], safe_file_name(&original_name));
-    let relative = PathBuf::from("assets")
-        .join(format!("{:04}", now.year()))
-        .join(file_name);
-    let destination = root.join(&relative);
-    let reused = destination.exists();
-    if !reused {
-        atomic_write(&destination, &bytes)?;
-    }
-    Ok(AssetImport {
-        absolute_path: destination.to_string_lossy().into_owned(),
-        markdown_path: relative.to_string_lossy().replace('\\', "/"),
-        reused,
-    })
-}
-
-fn validate_workspace_layout(layout_json: &str) -> AppResult<()> {
-    let parsed: serde_json::Value = serde_json::from_str(layout_json)?;
-    if !matches!(parsed.get("version").and_then(serde_json::Value::as_u64), Some(1 | 2)) {
-        return Err(AppError::Invalid("不支持的布局版本".to_string()));
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub fn save_workspace_layout(
-    state: State<'_, WorkspaceState>,
-    workspace: String,
-    layout_json: String,
-) -> AppResult<()> {
-    let root = authorized_root(&state, &PathBuf::from(workspace))?;
-    validate_workspace_layout(&layout_json)?;
-    atomic_write(&root.join(".yulingmd/layout.json"), layout_json.as_bytes())
-}
-
-#[tauri::command]
-pub fn load_workspace_layout(
-    state: State<'_, WorkspaceState>,
-    workspace: String,
-) -> AppResult<String> {
-    let root = authorized_root(&state, &PathBuf::from(workspace))?;
-    let path = root.join(".yulingmd/layout.json");
-    if !path.exists() {
-        return Ok("{\"version\":1,\"documents\":{}}".to_string());
-    }
-    let content = fs::read_to_string(path)?;
-    validate_workspace_layout(&content)?;
-    Ok(content)
-}
-
-#[tauri::command]
-pub fn write_export_file(
-    state: State<'_, ExportState>,
-    path: String,
-    bytes: Vec<u8>,
-) -> AppResult<()> {
-    let destination = state.ensure_authorized(&PathBuf::from(path))?;
-    let extension = destination
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default();
-    if !matches!(extension.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "html") {
-        return Err(AppError::Invalid("只允许导出 HTML、PNG 或 JPEG 文件".to_string()));
-    }
-    atomic_write(&destination, &bytes)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        atomic_write, create_document_at, duplicate_document_at, move_document_at, safe_file_name,
+        atomic_write, create_document_at, duplicate_document_at, move_document_at,
         trash_document_at,
-        validate_workspace_layout,
     };
     use tempfile::tempdir;
-
-    #[test]
-    fn sanitizes_asset_names_without_losing_unicode() {
-        assert_eq!(safe_file_name("截图 01?.png"), "截图-01-.png");
-        assert_eq!(safe_file_name("../"), "image.png");
-    }
-
-    #[test]
-    fn accepts_both_supported_layout_versions() {
-        assert!(validate_workspace_layout(r#"{"version":1,"documents":{}}"#).is_ok());
-        assert!(validate_workspace_layout(r#"{"version":2,"documents":{},"images":{}}"#).is_ok());
-        assert!(validate_workspace_layout(r#"{"version":3}"#).is_err());
-    }
 
     #[test]
     fn atomic_write_replaces_existing_content() {
@@ -632,7 +533,10 @@ mod tests {
         std::fs::write(directory.path().join("原文.md"), "内容").unwrap();
         let copied = duplicate_document_at(directory.path(), "原文.md", "原文 副本.md").unwrap();
         assert_eq!(copied.relative_path, "原文 副本.md");
-        assert_eq!(std::fs::read_to_string(directory.path().join("原文.md")).unwrap(), "内容");
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("原文.md")).unwrap(),
+            "内容"
+        );
         assert!(duplicate_document_at(directory.path(), "原文.md", "原文 副本.md").is_err());
     }
 

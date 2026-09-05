@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { markdown } from "@codemirror/lang-markdown";
-import { SearchQuery, search, setSearchQuery } from "@codemirror/search";
+import { search } from "@codemirror/search";
 import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
 import { getMarkRange, type Editor } from "@tiptap/core";
 import { TextSelection } from "@tiptap/pm/state";
@@ -18,48 +18,33 @@ import { protectUnsupportedMarkdown, RawMarkdownBlock, RawMarkdownInline, RawMar
 import { isExternalLink, normalizeLinkTarget } from "../lib/links";
 import { currentCodeBlockText, HighlightedCodeBlock } from "../lib/codeBlock";
 import { MermaidPreview } from "../lib/mermaidPreview";
-import {
-  FindReplace,
-  findStringMatches,
-  findTextMatches,
-  replaceAllMatches,
-  replaceStringMatches,
-  replaceTextMatch,
-  selectTextMatch,
-  showFindMatches,
-} from "../lib/findReplace";
+import { FindReplace } from "../lib/findReplace";
 import { copyPlainText, openExternalUrl } from "../lib/api";
 import { DocumentOutline } from "./DocumentOutline";
 import { countWritingStatistics, type WritingStatistics } from "../lib/statistics";
 import {
   AdjacentTableResizing,
-  isTableResizeBoundary,
   TABLE_CELL_MIN_WIDTH,
   TABLE_RESIZE_HANDLE_WIDTH,
 } from "../lib/tableResize";
-import {
-  PersistentSelection,
-  applyPersistentSelection,
-  isPrimarySelectionButton,
-  isSelectionSafeTarget,
-  readEditorSelection,
-  shouldPublishNativeSelection,
-  type EditorSelectionSnapshot,
-} from "../lib/persistentSelection";
+import { PersistentSelection } from "../lib/persistentSelection";
 import { centerEditorSelection } from "../lib/typewriter";
 import { MarkdownHighlight, MarkdownSubscript, MarkdownSuperscript } from "../lib/extendedMarks";
 import { imageExtension } from "../lib/editorImage";
 import { shouldEmitEditorUpdate } from "../lib/editorUpdate";
 import { EditorToolbar } from "./EditorToolbar";
 import { FindReplaceBar, LinkEditorBar, type LinkRange } from "./EditorBars";
-import {
-  idleSelectionLifecycle,
-  reduceSelectionLifecycle,
-  shouldPublishSelectionChange,
-} from "../lib/selectionLifecycle";
 import { EditorImageBars, useEditorImages, useMissingImageListener } from "./EditorImages";
 import type { SpecialSelectionMode } from "../lib/selectionPreferences";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
+import {
+  shouldStartPointerSelection,
+  usePersistentEditorSelection,
+  type SelectionPopover,
+} from "../lib/usePersistentEditorSelection";
+import { useEditorFind } from "../lib/useEditorFind";
+
+export { shouldStartPointerSelection } from "../lib/usePersistentEditorSelection";
 
 interface EditorPaneProps {
   workspace: string;
@@ -74,19 +59,9 @@ interface EditorPaneProps {
   onStatistics?: (statistics: WritingStatistics) => void;
 }
 
-interface SelectionPopover {
-  left: number;
-  top: number;
-}
-
 type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 const headingLevels: HeadingLevel[] = [1, 2, 3, 4, 5, 6];
 const emptyImageLayouts: ImageLayout[] = [];
-export function shouldStartPointerSelection(event: MouseEvent | PointerEvent): boolean {
-  return isPrimarySelectionButton(event.button)
-    && !isTableResizeBoundary(event.target, event.clientX);
-}
-
 export function shouldReplaceEditorDocument(current: ProseMirrorNode, restored: ProseMirrorNode): boolean {
   return !restored.eq(current);
 }
@@ -94,10 +69,6 @@ export function shouldReplaceEditorDocument(current: ProseMirrorNode, restored: 
 export function EditorPane({ workspace, documentPath, markdownText, tableLayouts, imageLayouts = emptyImageLayouts, specialSelectionMode = "visible", onChange, onSelection, onOpenAi, onStatistics }: EditorPaneProps) {
   const [sourceMode, setSourceMode] = useState(false);
   const [sourceText, setSourceText] = useState(markdownText);
-  const [findOpen, setFindOpen] = useState(false);
-  const [findQuery, setFindQuery] = useState("");
-  const [replacement, setReplacement] = useState("");
-  const [findIndex, setFindIndex] = useState(0);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkText, setLinkText] = useState("");
   const [linkUrl, setLinkUrl] = useState("");
@@ -110,12 +81,6 @@ export function EditorPane({ workspace, documentPath, markdownText, tableLayouts
   const frontmatter = useRef(frontmatterEnvelope(markdownText).frontmatter);
   const lastIncomingMarkdown = useRef(markdownText);
   const lastLocalEmission = useRef<string | null>(null);
-  const pointerSelecting = useRef(false);
-  const selectionLifecycle = useRef(idleSelectionLifecycle);
-  const suppressSelectionUpdate = useRef(false);
-  const selectionSnapshot = useRef<EditorSelectionSnapshot | null>(null);
-  const scrollFrame = useRef<number | null>(null);
-  const selectionFrame = useRef<number | null>(null);
   const findInput = useRef<HTMLInputElement>(null);
   const codeMirror = useRef<ReactCodeMirrorRef>(null);
   const sourceEmojiRange = useRef<{ from: number; to: number } | null>(null);
@@ -125,61 +90,14 @@ export function EditorPane({ workspace, documentPath, markdownText, tableLayouts
   const typewriterModeRef = useRef(typewriterMode);
   callbacks.current = { onChange, onSelection, onStatistics };
   typewriterModeRef.current = typewriterMode;
-
-  const positionPopover = (view: Editor["view"], snapshot: EditorSelectionSnapshot) => {
-    const caret = view.coordsAtPos(snapshot.head);
-    const scrollContainer = view.dom.closest(".editor-scroll");
-    const viewport = scrollContainer?.getBoundingClientRect();
-    if (viewport && (caret.bottom < viewport.top || caret.top > viewport.bottom)) {
-      setSelectionPopover(null);
-      return;
-    }
-
-    const top = caret.bottom + 46 > window.innerHeight ? caret.top - 42 : caret.bottom + 8;
-    setSelectionPopover({
-      left: Math.min(Math.max(caret.left, 74), window.innerWidth - 74),
-      top: Math.max(8, top),
-    });
-  };
-
-  const clearPublishedSelection = (currentEditor: Editor, collapse: boolean) => {
-    const snapshot = selectionSnapshot.current;
-    pointerSelecting.current = false;
-    selectionSnapshot.current = null;
-    setSelectionPopover(null);
-    applyPersistentSelection(currentEditor, null);
-    callbacks.current.onSelection("");
-    if (!collapse || !snapshot) return;
-    suppressSelectionUpdate.current = true;
-    currentEditor.commands.setTextSelection(Math.min(snapshot.head, currentEditor.state.doc.content.size));
-    suppressSelectionUpdate.current = false;
-  };
-
-  const publishSelection = (currentEditor: Editor, preserveOnEmpty = false) => {
-    const snapshot = readEditorSelection(currentEditor, specialSelectionMode);
-    if (!snapshot) {
-      const previous = selectionSnapshot.current;
-      if (preserveOnEmpty && previous) {
-        applyPersistentSelection(currentEditor, { from: previous.from, to: previous.to });
-        positionPopover(currentEditor.view, previous);
-        return;
-      }
-      clearPublishedSelection(currentEditor, false);
-      return;
-    }
-
-    const previous = selectionSnapshot.current;
-    selectionSnapshot.current = snapshot;
-    applyPersistentSelection(currentEditor, { from: snapshot.from, to: snapshot.to });
-    if (
-      !previous
-      || previous.from !== snapshot.from
-      || previous.to !== snapshot.to
-      || previous.text !== snapshot.text
-    ) {
-      callbacks.current.onSelection(snapshot.text);
-    }
-    positionPopover(currentEditor.view, snapshot);
+  const {
+    clearPublishedSelection, clearSelectionOnEditorUpdate, handleBlur, handleContextMenu,
+    handleScroll, handleSelectionUpdate, selectionSnapshot, suppressSelectionUpdate,
+  } = usePersistentEditorSelection(editorRef, specialSelectionMode, onSelection, setSelectionPopover);
+  const publishSourceReplacement = (nextSource: string) => {
+    setSourceText(nextSource);
+    lastLocalEmission.current = nextSource;
+    callbacks.current.onChange(nextSource, null);
   };
 
   const extensions = useMemo(
@@ -225,28 +143,8 @@ export function EditorPane({ workspace, documentPath, markdownText, tableLayouts
       editorProps: {
         attributes: { class: "yuling-prose", spellcheck: "true" },
         handleDOMEvents: {
-          contextmenu: (view) => {
-            selectionLifecycle.current = reduceSelectionLifecycle(selectionLifecycle.current, { type: "context-menu" });
-            const snapshot = selectionSnapshot.current;
-            if (!snapshot || snapshot.to > view.state.doc.content.size) return false;
-            suppressSelectionUpdate.current = true;
-            view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, snapshot.anchor, snapshot.head)));
-            suppressSelectionUpdate.current = false;
-            window.requestAnimationFrame(() => positionPopover(view, snapshot));
-            return false;
-          },
-          blur: (view) => {
-            selectionLifecycle.current = reduceSelectionLifecycle(selectionLifecycle.current, { type: "blur" });
-            const snapshot = selectionSnapshot.current;
-            if (snapshot && snapshot.to <= view.state.doc.content.size) {
-              window.requestAnimationFrame(() => {
-                if (selectionSnapshot.current === snapshot && editor && !editor.isDestroyed) {
-                  applyPersistentSelection(editor, { from: snapshot.from, to: snapshot.to });
-                }
-              });
-            }
-            return false;
-          },
+          contextmenu: handleContextMenu,
+          blur: handleBlur,
         },
         handlePaste: (_view, event) => {
           const files = Array.from(event.clipboardData?.items ?? []).map((item) => item.getAsFile()).filter((file): file is File => Boolean(file));
@@ -267,11 +165,7 @@ export function EditorPane({ workspace, documentPath, markdownText, tableLayouts
       },
       onUpdate: ({ editor: currentEditor, transaction }) => {
         if (!shouldEmitEditorUpdate(transaction)) return;
-        if (selectionSnapshot.current) {
-          selectionSnapshot.current = null;
-          setSelectionPopover(null);
-          callbacks.current.onSelection("");
-        }
+        clearSelectionOnEditorUpdate();
         const markdownBody = currentEditor.getMarkdown();
         const nextMarkdown = joinFrontmatter(frontmatter.current, markdownBody);
         lastLocalEmission.current = nextMarkdown;
@@ -280,13 +174,20 @@ export function EditorPane({ workspace, documentPath, markdownText, tableLayouts
         if (typewriterModeRef.current) window.requestAnimationFrame(() => centerEditorSelection(currentEditor.view));
       },
       onSelectionUpdate: ({ editor: currentEditor }) => {
-        if (!pointerSelecting.current && !suppressSelectionUpdate.current) publishSelection(currentEditor);
+        handleSelectionUpdate(currentEditor);
         if (typewriterModeRef.current) window.requestAnimationFrame(() => centerEditorSelection(currentEditor.view));
       },
     },
     [documentPath, extensions],
   );
   editorRef.current = editor;
+  const {
+    findOpen, setFindOpen, findQuery, setFindQuery, replacement, setReplacement,
+    setFindIndex, matches, activeFindIndex, moveToMatch, replaceCurrentMatch, replaceEveryMatch,
+  } = useEditorFind({
+    editor, markdownText, sourceMode, sourceText, codeMirror, findInput,
+    suppressSelectionUpdate, setSelectionPopover, publishSourceReplacement,
+  });
 
   const imageState = useEditorState({
     editor,
@@ -337,78 +238,6 @@ export function EditorPane({ workspace, documentPath, markdownText, tableLayouts
   };
 
   useEffect(() => {
-    if (!editor || editor.isDestroyed) return;
-    const editorDom = editor.view.dom;
-    const scheduleStablePublish = (preserveOnEmpty = false) => {
-      if (selectionFrame.current !== null) window.cancelAnimationFrame(selectionFrame.current);
-      selectionFrame.current = window.requestAnimationFrame(() => {
-        selectionFrame.current = window.requestAnimationFrame(() => {
-          selectionFrame.current = null;
-          if (!editor.isDestroyed) publishSelection(editor, preserveOnEmpty);
-        });
-      });
-    };
-    const startPointerSelection = (event: MouseEvent | PointerEvent) => {
-      if (!shouldStartPointerSelection(event)) return;
-      selectionLifecycle.current = reduceSelectionLifecycle(selectionLifecycle.current, { type: "primary-down" });
-      pointerSelecting.current = true;
-      setSelectionPopover(null);
-    };
-    const finishPointerSelection = (preserveOnEmpty = false) => {
-      if (!pointerSelecting.current) return;
-      selectionLifecycle.current = reduceSelectionLifecycle(selectionLifecycle.current, {
-        type: preserveOnEmpty ? "pointer-cancel" : "pointer-up",
-      });
-      pointerSelecting.current = false;
-      scheduleStablePublish(preserveOnEmpty || selectionLifecycle.current.preserveOnRelease);
-    };
-    const publishNativeSelection = () => {
-      const nativeSelection = window.getSelection();
-      const usable = shouldPublishNativeSelection(nativeSelection, editorDom);
-      if (shouldPublishSelectionChange(selectionLifecycle.current, suppressSelectionUpdate.current, usable)) {
-        scheduleStablePublish();
-      }
-    };
-    const clearFromOutside = (event: PointerEvent) => {
-      if (!selectionSnapshot.current || isSelectionSafeTarget(event.target)) return;
-      clearPublishedSelection(editor, true);
-    };
-    const clearFromEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || !selectionSnapshot.current) return;
-      clearPublishedSelection(editor, true);
-    };
-    const supportsPointerEvents = typeof window.PointerEvent !== "undefined";
-    const finish = () => finishPointerSelection(false);
-    const cancel = () => finishPointerSelection(true);
-    if (supportsPointerEvents) {
-      editorDom.addEventListener("pointerdown", startPointerSelection, true);
-      window.addEventListener("pointerup", finish);
-      window.addEventListener("pointercancel", cancel);
-    } else {
-      editorDom.addEventListener("mousedown", startPointerSelection, true);
-      window.addEventListener("mouseup", finish);
-    }
-    document.addEventListener("selectionchange", publishNativeSelection);
-    window.addEventListener("pointerdown", clearFromOutside, true);
-    window.addEventListener("keydown", clearFromEscape);
-    return () => {
-      if (supportsPointerEvents) {
-        editorDom.removeEventListener("pointerdown", startPointerSelection, true);
-        window.removeEventListener("pointerup", finish);
-        window.removeEventListener("pointercancel", cancel);
-      } else {
-        editorDom.removeEventListener("mousedown", startPointerSelection, true);
-        window.removeEventListener("mouseup", finish);
-      }
-      document.removeEventListener("selectionchange", publishNativeSelection);
-      window.removeEventListener("pointerdown", clearFromOutside, true);
-      window.removeEventListener("keydown", clearFromEscape);
-      if (scrollFrame.current !== null) window.cancelAnimationFrame(scrollFrame.current);
-      if (selectionFrame.current !== null) window.cancelAnimationFrame(selectionFrame.current);
-    };
-  }, [editor, specialSelectionMode]);
-
-  useEffect(() => {
     const handleFindShortcut = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLocaleLowerCase() === "f") {
         event.preventDefault();
@@ -438,42 +267,6 @@ export function EditorPane({ workspace, documentPath, markdownText, tableLayouts
     if (!editor || editor.isDestroyed) return;
     callbacks.current.onStatistics?.(countWritingStatistics(editor.state.doc.textBetween(0, editor.state.doc.content.size, "\n")));
   }, [documentPath, editor]);
-
-  useEffect(() => {
-    if (!findOpen) return;
-    window.requestAnimationFrame(() => {
-      findInput.current?.focus();
-      findInput.current?.select();
-    });
-  }, [findOpen]);
-
-  useEffect(() => {
-    if (!editor || editor.isDestroyed) return;
-    if (!findOpen || sourceMode) {
-      showFindMatches(editor, "", 0);
-      return;
-    }
-    const matches = findTextMatches(editor.state.doc, findQuery);
-    const activeIndex = matches.length ? Math.min(findIndex, matches.length - 1) : 0;
-    showFindMatches(editor, findQuery, activeIndex);
-    const match = matches[activeIndex];
-    if (!match) return;
-    suppressSelectionUpdate.current = true;
-    selectTextMatch(editor, match);
-    suppressSelectionUpdate.current = false;
-    setSelectionPopover(null);
-  }, [editor, findIndex, findOpen, findQuery, markdownText, sourceMode]);
-
-  useEffect(() => {
-    const view = codeMirror.current?.view;
-    if (!sourceMode || !view) return;
-    const query = findOpen ? findQuery : "";
-    view.dispatch({ effects: setSearchQuery.of(new SearchQuery({ search: query, caseSensitive: false, literal: true })) });
-    const matches = findStringMatches(sourceText, query);
-    const activeIndex = matches.length ? Math.min(findIndex, matches.length - 1) : 0;
-    const match = matches[activeIndex];
-    if (match) view.dispatch({ selection: { anchor: match.from, head: match.to }, scrollIntoView: true });
-  }, [findIndex, findOpen, findQuery, sourceMode, sourceText]);
 
   useEffect(() => {
     const incomingChanged = markdownText !== lastIncomingMarkdown.current;
@@ -564,24 +357,6 @@ export function EditorPane({ workspace, documentPath, markdownText, tableLayouts
       .catch(() => setCodeCopyState("error"));
   };
 
-  const matches = findQuery
-    ? sourceMode
-      ? findStringMatches(sourceText, findQuery)
-      : editor ? findTextMatches(editor.state.doc, findQuery) : []
-    : [];
-  const activeFindIndex = matches.length ? Math.min(findIndex, matches.length - 1) : 0;
-
-  const moveToMatch = (direction: 1 | -1) => {
-    if (!matches.length) return;
-    setFindIndex((activeFindIndex + direction + matches.length) % matches.length);
-  };
-
-  const publishSourceReplacement = (nextSource: string) => {
-    setSourceText(nextSource);
-    lastLocalEmission.current = nextSource;
-    callbacks.current.onChange(nextSource, null);
-  };
-
   const rememberEmojiPosition = () => {
     if (!sourceMode) return;
     const range = codeMirror.current?.view?.state.selection.main;
@@ -606,27 +381,6 @@ export function EditorPane({ workspace, documentPath, markdownText, tableLayouts
     });
     sourceEmojiRange.current = null;
     view.focus();
-  };
-
-  const replaceCurrentMatch = () => {
-    const match = matches[activeFindIndex];
-    if (!match) return;
-    if (sourceMode) {
-      publishSourceReplacement(replaceStringMatches(sourceText, [match], replacement));
-    } else if (editor) {
-      replaceTextMatch(editor, match, replacement);
-    }
-    setFindIndex(Math.min(activeFindIndex, Math.max(0, matches.length - 2)));
-  };
-
-  const replaceEveryMatch = () => {
-    if (!matches.length) return;
-    if (sourceMode) {
-      publishSourceReplacement(replaceStringMatches(sourceText, matches, replacement));
-    } else if (editor) {
-      replaceAllMatches(editor, matches, replacement);
-    }
-    setFindIndex(0);
   };
 
   if (!editor) return <div className="editor-loading">正在准备编辑器…</div>;
@@ -676,14 +430,7 @@ export function EditorPane({ workspace, documentPath, markdownText, tableLayouts
       ) : (
         <div
           className="editor-scroll"
-          onScroll={() => {
-            if (!selectionSnapshot.current) return;
-            if (scrollFrame.current !== null) window.cancelAnimationFrame(scrollFrame.current);
-            scrollFrame.current = window.requestAnimationFrame(() => {
-              scrollFrame.current = null;
-              if (selectionSnapshot.current) positionPopover(editor.view, selectionSnapshot.current);
-            });
-          }}
+          onScroll={handleScroll}
         >
           <EditorContent editor={editor} />
         </div>

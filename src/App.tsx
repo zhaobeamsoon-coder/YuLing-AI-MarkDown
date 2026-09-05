@@ -7,57 +7,39 @@ import { ExportPanel } from "./components/ExportPanel";
 import { FileSidebar } from "./components/FileSidebar";
 import { WorkspaceNavigator } from "./components/WorkspaceNavigator";
 import {
-  authorizeWorkspace,
-  chooseMarkdownFile,
   chooseMarkdownSavePath,
-  chooseWorkspace,
   createDocument,
   duplicateDocument,
-  listDocuments,
-  listDirectories,
   moveDocument,
   readDocument,
   reindexWorkspace,
   revealDocumentInFinder,
-  onOpenedMarkdown,
-  takeOpenedMarkdown,
   trashDocument,
   writeDocument,
   writeMarkdownCopy,
   copyPlainText,
   type DocumentEntry,
-  type OpenedMarkdown,
 } from "./lib/api";
-import { extractImageLayouts, extractTableLayouts, normalizeWorkspaceLayout, type ImageLayout, type TableLayout, type TiptapNode, type WorkspaceLayout } from "./lib/tableLayout";
-import { loadLayout, saveLayout } from "./lib/api";
+import { extractImageLayouts, extractTableLayouts, type ImageLayout, type TableLayout, type TiptapNode, type WorkspaceLayout } from "./lib/tableLayout";
+import { saveLayout } from "./lib/api";
 import { nextDuplicateDocumentPath, nextUntitledDocumentPath, parentFolder } from "./lib/fileTree";
 import { type WritingStatistics } from "./lib/statistics";
-import { clearWorkspaceSession, loadWorkspaceSession, saveWorkspaceSession } from "./lib/session";
-import { loadCrashDrafts, removeCrashDraft, type CrashDraft } from "./lib/crashDraft";
+import { removeCrashDraft, type CrashDraft } from "./lib/crashDraft";
 import { useCrashDraftPersistence } from "./lib/useCrashDraftPersistence";
 import { AppTopbar, StatusBar, WelcomeScreen } from "./components/AppChrome";
 import { useFolderOperations } from "./lib/useFolderOperations";
 import { useRecentRecords } from "./lib/useRecentRecords";
 import { useRecentActions } from "./lib/useRecentActions";
-import { libraryStructureSignature, useWorkspaceLibraryWatcher } from "./lib/useWorkspaceLibraryWatcher";
+import { useWorkspaceController, type OpenDocument } from "./lib/useWorkspaceController";
+import { useAiTaskController } from "./lib/useAiTaskController";
+import { useAppShortcuts } from "./lib/useAppShortcuts";
 import {
   loadSpecialSelectionMode,
   saveSpecialSelectionMode,
   type SpecialSelectionMode,
 } from "./lib/selectionPreferences";
 
-export interface OpenDocument extends DocumentEntry {
-  content: string;
-  savedContent: string;
-  documentJson: TiptapNode | null;
-  saving: boolean;
-}
-
-interface AiTaskContext {
-  workspace: string | null;
-  documentPath: string | null;
-  documentMarkdown: string;
-}
+export type { OpenDocument } from "./lib/useWorkspaceController";
 
 function titleFromPath(path: string): string {
   return path.split("/").pop()?.replace(/\.md$/i, "") || "未命名";
@@ -67,24 +49,16 @@ const emptyTableLayouts: TableLayout[] = [];
 const emptyImageLayouts: ImageLayout[] = [];
 
 export default function App() {
-  const [workspace, setWorkspace] = useState<string | null>(null);
-  const [documents, setDocuments] = useState<DocumentEntry[]>([]);
-  const [directories, setDirectories] = useState<string[]>([]);
   const [tabs, setTabs] = useState<OpenDocument[]>([]);
   const [closedDocuments, setClosedDocuments] = useState<DocumentEntry[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
-  const [selection, setSelection] = useState("");
-  const [aiSelection, setAiSelection] = useState("");
-  const [aiTaskVersion, setAiTaskVersion] = useState(0);
-  const [aiTaskContext, setAiTaskContext] = useState<AiTaskContext>({
-    workspace: null,
-    documentPath: null,
-    documentMarkdown: "",
-  });
+  const {
+    selection, setSelection, aiSelection, aiTaskVersion, aiTaskContext,
+    aiVisible, setAiVisible, openForSelection, openFromTopbar,
+  } = useAiTaskController();
   const [specialSelectionMode, setSpecialSelectionMode] = useState(loadSpecialSelectionMode);
   const [filter, setFilter] = useState("");
   const [libraryVisible, setLibraryVisible] = useState(false);
-  const [aiVisible, setAiVisible] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [status, setStatus] = useState("就绪");
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
@@ -93,7 +67,6 @@ export default function App() {
   const [renamingTabPath, setRenamingTabPath] = useState<string | null>(null);
   const [tabRenameValue, setTabRenameValue] = useState("");
   const [documentStatistics, setDocumentStatistics] = useState<WritingStatistics>({ words: 0, characters: 0, lines: 0, paragraphs: 0, readingMinutes: 0 });
-  const [sessionReady, setSessionReady] = useState(false);
   const [recoveryDrafts, setRecoveryDrafts] = useState<CrashDraft[]>([]);
   const recentRecords = useRecentRecords();
   const recoveryDraft = recoveryDrafts[0] ?? null;
@@ -102,245 +75,18 @@ export default function App() {
   const layoutVersions = useRef<Record<string, number>>({});
   const persistedLayoutVersions = useRef<Record<string, number>>({});
   const [layoutRevision, setLayoutRevision] = useState(0);
-  const indexTimer = useRef<number | null>(null);
-  const librarySignature = useRef("");
+  const { rememberWorkspace, rememberFile } = recentRecords;
+  const {
+    workspace, documents, directories, sessionReady, refreshDocuments,
+    openDocument, activateWorkspace, openWorkspace, loadOpenedMarkdown, openSingleMarkdown,
+  } = useWorkspaceController({
+    tabs, setTabs, setClosedDocuments, activePath, setActivePath, setSelection,
+    setLibraryVisible, setAiVisible, setStatus, setWorkspaceError, setScanningWorkspace,
+    setRecoveryDrafts, layout, rememberWorkspace, rememberFile,
+  });
   const activeDocument = useMemo(() => tabs.find((tab) => tab.path === activePath) ?? null, [tabs, activePath]);
   const focusMode = !libraryVisible && !aiVisible;
-  const sessionTabPaths = tabs.map((tab) => tab.relativePath).join("\0");
   useCrashDraftPersistence(sessionReady, tabs, workspace, recoveryDrafts.map((draft) => draft.path));
-  const { rememberWorkspace, rememberFile } = recentRecords;
-  const refreshDocuments = useCallback(async (
-    root: string,
-    options: { quiet?: boolean; indexOnlyWhenChanged?: boolean } = {},
-  ) => {
-    const [entries, folders] = await Promise.all([listDocuments(root), listDirectories(root)]);
-    const nextSignature = libraryStructureSignature(entries, folders);
-    const structureChanged = nextSignature !== librarySignature.current;
-    librarySignature.current = nextSignature;
-    setDocuments(entries);
-    setDirectories(folders);
-    if (!options.quiet) setStatus(`已载入 ${entries.length} 篇文档`);
-    if (options.indexOnlyWhenChanged && !structureChanged) return entries;
-    if (indexTimer.current !== null) window.clearTimeout(indexTimer.current);
-    indexTimer.current = window.setTimeout(() => {
-      indexTimer.current = null;
-      void reindexWorkspace(root)
-        .then((count) => {
-          if (!options.quiet) setStatus(`已索引 ${count} 篇文档`);
-        })
-        .catch((reason) => setStatus(`文档可正常使用，索引稍后重试：${String(reason)}`));
-    }, 600);
-    return entries;
-  }, []);
-
-  useWorkspaceLibraryWatcher(
-    workspace,
-    (root) => refreshDocuments(root, { quiet: true, indexOnlyWhenChanged: true }),
-    setStatus,
-  );
-
-  const openDocument = useCallback(async (entry: DocumentEntry) => {
-    const existing = tabs.find((tab) => tab.path === entry.path);
-    if (existing) {
-      setActivePath(entry.path);
-      if (workspace) rememberFile(workspace, entry.relativePath);
-      return;
-    }
-    setStatus("正在打开…");
-    const loaded = await readDocument(entry.path);
-    setTabs((current) => [...current, { ...entry, ...loaded, savedContent: loaded.content, documentJson: null, saving: false }]);
-    setActivePath(entry.path);
-    if (workspace) rememberFile(workspace, entry.relativePath);
-    setStatus("已打开");
-  }, [rememberFile, tabs, workspace]);
-
-  const activateWorkspace = useCallback(async (chosen: string) => {
-    const authorized = await authorizeWorkspace(chosen);
-    setWorkspace(authorized);
-    setTabs([]);
-    setClosedDocuments([]);
-    setActivePath(null);
-    setSelection("");
-    setDocuments([]);
-    setDirectories([]);
-    setLibraryVisible(true);
-    setAiVisible(false);
-    try {
-      layout.current = normalizeWorkspaceLayout(JSON.parse(await loadLayout(authorized)));
-    } catch {
-      layout.current = { version: 2, documents: {}, images: {} };
-    }
-    await refreshDocuments(authorized);
-    rememberWorkspace(authorized);
-    return authorized;
-  }, [refreshDocuments, rememberWorkspace]);
-
-  const openWorkspace = async () => {
-    try {
-      setWorkspaceError(null);
-      setScanningWorkspace(true);
-      setStatus("正在选择文档库…");
-      const chosen = await chooseWorkspace();
-      if (!chosen) {
-        setStatus("已取消");
-        return;
-      }
-      setStatus("正在扫描 Markdown 文档…");
-      await activateWorkspace(chosen);
-    } catch (reason) {
-      const message = String(reason);
-      setWorkspaceError(message);
-      setStatus(`无法打开文档库：${message}`);
-    } finally {
-      setScanningWorkspace(false);
-    }
-  };
-
-  const loadOpenedMarkdown = useCallback(async (opened: OpenedMarkdown) => {
-    setWorkspaceError(null);
-    setScanningWorkspace(true);
-    setStatus("正在打开 Markdown 文档…");
-    try {
-      let nextLayout: WorkspaceLayout;
-      try {
-        nextLayout = normalizeWorkspaceLayout(JSON.parse(await loadLayout(opened.workspace)));
-      } catch {
-        nextLayout = { version: 2, documents: {}, images: {} };
-      }
-      const [entries, folders] = await Promise.all([
-        listDocuments(opened.workspace),
-        listDirectories(opened.workspace),
-      ]);
-      const relativePath = opened.path.startsWith(`${opened.workspace}/`)
-        ? opened.path.slice(opened.workspace.length + 1)
-        : opened.path.split("/").at(-1) ?? "文档.md";
-      const entry = entries.find((document) => document.path === opened.path) ?? {
-        path: opened.path,
-        relativePath,
-        title: titleFromPath(opened.path),
-        modifiedMs: 0,
-      };
-      const loaded = await readDocument(opened.path);
-      layout.current = nextLayout;
-      setWorkspace(opened.workspace);
-      setClosedDocuments([]);
-      setSelection("");
-      setDocuments(entries);
-      setDirectories(folders);
-      setLibraryVisible(true);
-      setAiVisible(false);
-      setTabs([{ ...entry, ...loaded, savedContent: loaded.content, documentJson: null, saving: false }]);
-      setActivePath(opened.path);
-      setRecoveryDrafts(loadCrashDrafts()
-        .filter((draft) => draft.path === opened.path && draft.content !== loaded.content)
-        .sort((left, right) => right.updatedAt - left.updatedAt));
-      setStatus("已打开");
-      rememberWorkspace(opened.workspace);
-      rememberFile(opened.workspace, relativePath);
-      if (indexTimer.current !== null) window.clearTimeout(indexTimer.current);
-      indexTimer.current = window.setTimeout(() => {
-        indexTimer.current = null;
-        void reindexWorkspace(opened.workspace)
-          .then((count) => setStatus(`已索引 ${count} 篇文档`))
-          .catch((reason) => setStatus(`文档可正常使用，索引稍后重试：${String(reason)}`));
-      }, 600);
-    } catch (reason) {
-      setWorkspaceError(String(reason));
-      setStatus(`无法打开 Markdown 文档：${String(reason)}`);
-    } finally {
-      setScanningWorkspace(false);
-    }
-  }, [rememberFile, rememberWorkspace]);
-
-  const openSingleMarkdown = async () => {
-    try {
-      const opened = await chooseMarkdownFile();
-      if (opened) await loadOpenedMarkdown(opened);
-    } catch (reason) {
-      setStatus(`无法打开 Markdown 文档：${String(reason)}`);
-    }
-  };
-
-  const restoreLastSession = useCallback(async () => {
-    const session = loadWorkspaceSession();
-    if (!session) return;
-    try {
-      const authorized = await authorizeWorkspace(session.workspace);
-      setWorkspace(authorized);
-      setLibraryVisible(true);
-      setAiVisible(false);
-      try {
-        layout.current = normalizeWorkspaceLayout(JSON.parse(await loadLayout(authorized)));
-      } catch {
-        layout.current = { version: 2, documents: {}, images: {} };
-      }
-      const entries = await refreshDocuments(authorized);
-      const requested = session.tabs
-        .map((relativePath) => entries.find((entry) => entry.relativePath === relativePath))
-        .filter((entry): entry is DocumentEntry => Boolean(entry));
-      const restored = (await Promise.all(requested.map(async (entry): Promise<OpenDocument | null> => {
-        try {
-          const loaded = await readDocument(entry.path);
-          return { ...entry, ...loaded, savedContent: loaded.content, documentJson: null, saving: false };
-        } catch {
-          return null;
-        }
-      }))).filter((entry): entry is OpenDocument => entry !== null);
-      setTabs(restored);
-      const drafts = loadCrashDrafts();
-      setRecoveryDrafts(drafts
-        .filter((draft) => restored.some((entry) => entry.path === draft.path && entry.content !== draft.content))
-        .sort((left, right) => right.updatedAt - left.updatedAt));
-      const requestedActive = entries.find((entry) => entry.relativePath === session.active)?.path;
-      setActivePath(restored.some((entry) => entry.path === requestedActive) ? requestedActive ?? null : restored[0]?.path ?? null);
-      setStatus(restored.length ? "已恢复上次会话" : "已恢复上次文档库");
-    } catch {
-      clearWorkspaceSession();
-      setStatus("上次文档库不可用，已跳过恢复");
-    }
-  }, [refreshDocuments]);
-
-  useEffect(() => {
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    const drain = async () => {
-      const pending = await takeOpenedMarkdown();
-      const opened = pending.at(-1);
-      if (!disposed && opened) await loadOpenedMarkdown(opened);
-      return Boolean(opened);
-    };
-    void onOpenedMarkdown(() => void drain()).then((stop) => {
-      if (disposed) stop();
-      else unlisten = stop;
-    });
-    void (async () => {
-      const opened = await drain();
-      if (!opened && !disposed) await restoreLastSession();
-      if (!disposed) setSessionReady(true);
-    })();
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, [loadOpenedMarkdown, restoreLastSession]);
-
-  useEffect(() => {
-    if (!sessionReady) return;
-    if (!workspace) {
-      clearWorkspaceSession();
-      return;
-    }
-    saveWorkspaceSession({
-      version: 1,
-      workspace,
-      tabs: tabs.map((tab) => tab.relativePath),
-      active: tabs.find((tab) => tab.path === activePath)?.relativePath ?? null,
-    });
-  }, [activePath, sessionReady, sessionTabPaths, workspace]);
-
-  useEffect(() => () => {
-    if (indexTimer.current !== null) window.clearTimeout(indexTimer.current);
-  }, []);
 
   const updateActiveDocument = (content: string, documentJson: TiptapNode | null) => {
     if (!activePath) return;
@@ -350,31 +96,12 @@ export default function App() {
     setStatus("未保存");
   };
 
-  const updateSelection = (text: string) => {
-    setSelection(text);
-  };
-
   const openAiForSelection = () => {
-    if (!selection.trim() || !workspace || !activeDocument) return;
-    setAiSelection(selection);
-    setAiTaskContext({
-      workspace,
-      documentPath: activeDocument.path,
-      documentMarkdown: activeDocument.content,
-    });
-    setAiTaskVersion((current) => current + 1);
-    setAiVisible(true);
+    openForSelection(workspace, activeDocument);
   };
 
   const openAiFromTopbar = () => {
-    if (aiTaskVersion === 0 && workspace && activeDocument) {
-      setAiTaskContext({
-        workspace,
-        documentPath: activeDocument.path,
-        documentMarkdown: activeDocument.content,
-      });
-    }
-    setAiVisible(true);
+    openFromTopbar(workspace, activeDocument);
   };
 
   const updateSpecialSelectionMode = (mode: SpecialSelectionMode) => {
@@ -558,17 +285,6 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    const saveShortcut = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.key.toLocaleLowerCase() !== "s") return;
-      event.preventDefault();
-      if (event.shiftKey) void saveActiveDocumentAs();
-      else void saveActiveDocument();
-    };
-    window.addEventListener("keydown", saveShortcut);
-    return () => window.removeEventListener("keydown", saveShortcut);
-  });
-
   const closeTab = async (document: OpenDocument) => {
     try {
       await saveDocumentNow(document);
@@ -599,32 +315,13 @@ export default function App() {
     }
   }, [closedDocuments, openDocument]);
 
-  useEffect(() => {
-    const restoreClosedTab = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.key.toLocaleLowerCase() !== "t") return;
-      event.preventDefault();
-      void reopenLastClosed();
-    };
-    window.addEventListener("keydown", restoreClosedTab);
-    return () => window.removeEventListener("keydown", restoreClosedTab);
-  }, [reopenLastClosed]);
-
-  useEffect(() => {
-    const openNavigator = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey)) return;
-      if (event.key.toLocaleLowerCase() === "p") {
-        event.preventDefault();
-        if (workspace) setNavigatorMode("quick");
-      } else if (event.shiftKey && event.key.toLocaleLowerCase() === "f") {
-        event.preventDefault();
-        if (workspace) setNavigatorMode("search");
-      } else if (event.key === "Escape") {
-        setNavigatorMode(null);
-      }
-    };
-    window.addEventListener("keydown", openNavigator);
-    return () => window.removeEventListener("keydown", openNavigator);
-  }, [workspace]);
+  useAppShortcuts({
+    workspace,
+    save: () => void saveActiveDocument(),
+    saveAs: () => void saveActiveDocumentAs(),
+    reopenClosed: () => void reopenLastClosed(),
+    setNavigatorMode,
+  });
 
   const relocateDocument = async (document: DocumentEntry, destinationFolder: string, newName?: string) => {
     if (!workspace) return;
@@ -764,7 +461,7 @@ export default function App() {
           <EditorPane key={activeDocument.path} workspace={workspace} documentPath={activeDocument.path} markdownText={activeDocument.content}
             tableLayouts={layout.current.documents[activeDocument.relativePath] ?? emptyTableLayouts} imageLayouts={layout.current.images[activeDocument.relativePath] ?? emptyImageLayouts}
             specialSelectionMode={specialSelectionMode}
-            onChange={updateActiveDocument} onSelection={updateSelection} onOpenAi={openAiForSelection} onStatistics={setDocumentStatistics} />
+            onChange={updateActiveDocument} onSelection={setSelection} onOpenAi={openAiForSelection} onStatistics={setDocumentStatistics} />
         ) : (
           <WelcomeScreen workspace={workspace} scanning={scanningWorkspace} documentCount={documents.length}
             error={workspaceError} openWorkspace={() => void openWorkspace()} openFile={() => void openSingleMarkdown()}

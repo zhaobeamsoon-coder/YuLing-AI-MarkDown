@@ -1,4 +1,5 @@
-use crate::ai_cli::{probe_cli, probe_cli_path, render_cli_prompt, run_cli, CliKind};
+use crate::ai_cli::{probe_cli, probe_cli_path, run_cli, CliKind};
+use crate::ai_cli_prompt::render_cli_prompt;
 use crate::credentials;
 use crate::error::{AppError, AppResult};
 use crate::workspace::WorkspaceState;

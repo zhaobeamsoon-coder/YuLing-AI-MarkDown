@@ -1,5 +1,6 @@
 mod ai;
 mod ai_cli;
+mod ai_cli_prompt;
 mod credentials;
 mod error;
 mod external;
@@ -10,6 +11,7 @@ mod open_files;
 mod pdf;
 mod storage;
 mod workspace;
+mod workspace_assets;
 
 pub fn run() {
     use tauri::{Emitter, Manager};
@@ -61,10 +63,10 @@ pub fn run() {
             workspace::move_directory,
             workspace::trash_directory,
             workspace::trash_document,
-            workspace::import_asset,
-            workspace::save_workspace_layout,
-            workspace::load_workspace_layout,
-            workspace::write_export_file,
+            workspace_assets::import_asset,
+            workspace_assets::save_workspace_layout,
+            workspace_assets::load_workspace_layout,
+            workspace_assets::write_export_file,
             export_paths::choose_export_path,
             external::open_external_url,
             credentials::save_credential,
