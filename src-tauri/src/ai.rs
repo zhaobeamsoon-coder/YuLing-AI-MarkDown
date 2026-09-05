@@ -1,4 +1,4 @@
-use crate::ai_cli::{probe_cli, render_cli_prompt, run_cli, CliKind};
+use crate::ai_cli::{probe_cli, probe_cli_path, render_cli_prompt, run_cli, CliKind};
 use crate::credentials;
 use crate::error::{AppError, AppResult};
 use crate::workspace::WorkspaceState;
@@ -372,18 +372,15 @@ pub fn cancel_ai_chat(state: State<'_, AiState>, request_id: String) -> AppResul
 pub async fn test_ai_connection(request: AiChatRequest) -> AppResult<AiConnectionResult> {
     if matches!(request.provider.as_str(), "claude-cli" | "codex-cli") {
         let kind = CliKind::parse(&request.provider)?;
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .ok_or_else(|| AppError::Invalid("无法确定用户目录".to_string()))?;
-        let path_env = std::env::var("PATH").ok();
-        let report = probe_cli(
-            kind,
-            request.cli_path.as_deref(),
-            &home,
-            path_env.as_deref(),
-            Duration::from_secs(2),
-        )
-        .await;
+        let report = if let Some(path) = request.cli_path.as_deref().filter(|path| !path.trim().is_empty()) {
+            probe_cli_path(kind, Path::new(path), Duration::from_secs(2)).await
+        } else {
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .ok_or_else(|| AppError::Invalid("无法确定用户目录".to_string()))?;
+            let path_env = std::env::var("PATH").ok();
+            probe_cli(kind, None, &home, path_env.as_deref(), Duration::from_secs(2)).await
+        };
         return Ok(
             if let (Some(path), Some(version)) = (report.resolved_path, report.version) {
                 AiConnectionResult {

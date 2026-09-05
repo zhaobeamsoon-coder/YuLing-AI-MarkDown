@@ -10,6 +10,11 @@ but must not silently relax them.
 `CLAUDE.md` points to this file so architecture, safety, testing, and delivery
 constraints have one project-level source of truth.
 
+Keep this file focused on durable working rules. Product definitions, system
+architecture, design proposals, and implementation details belong in their
+dedicated documents; reference those sources here instead of copying them
+inline.
+
 ## 1. Planning and stage discipline
 
 - Inspect active instructions, repository status, relevant code, tests, schemas,
@@ -21,6 +26,10 @@ constraints have one project-level source of truth.
 - Treat planning, architecture, implementation, and verification as distinct
   stages. Planning does not edit implementation files; implementation follows
   the approved design instead of silently redesigning it.
+- Before implementation, confirm that the approved plan or ADR is reachable
+  from the current branch and reread the authoritative text. Do not implement
+  from memory, a stale summary, or a document that exists only on another
+  branch.
 - If implementation reveals a missing product decision, return to planning. If
   it reveals an architectural conflict, return to architecture review. If
   verification reveals a bug inside the approved scope, return to implementation.
@@ -83,6 +92,9 @@ constraints have one project-level source of truth.
 - Plans, ADRs, reviews, and previous reports are evidence to reassess, not proof.
   Recheck their premises and version context before implementation, especially
   before irreversible actions.
+- Verified facts have a time and version context, not an unlimited shelf life.
+  Recheck repository state, configuration, deployment state, and external
+  conditions when an earlier finding may have become stale.
 - Material findings and recommendations must use one of these evidence labels:
   `我跑过 / I ran it (command and result)`,
   `文档里写的（未验） / documented but unverified`, or
@@ -93,6 +105,10 @@ constraints have one project-level source of truth.
 - A risk conclusion needs the complete chain `code path -> actual configuration
   -> active version -> triggerability -> impact`. An incomplete chain is
   `条件触发 / conditional` or `待验证 / needs verification`, not a current incident.
+- Investigation findings use one of `当前成立 / currently present`,
+  `历史遗留 / historical`, `条件触发 / conditional`, or
+  `待验证 / needs verification`. Severity applies only after the evidence chain
+  establishes a currently triggerable impact.
 - Do not claim fixed, complete, passing, deployable, or usable until relevant
   checks have run successfully. Report skipped checks, failures, uncovered
   system gestures, and deviations from the approved plan.
@@ -113,6 +129,9 @@ constraints have one project-level source of truth.
 - Every new critical assertion must be mutation-verified: disable exactly the
   protected behavior, observe that assertion fail for the expected reason, then
   restore the implementation. One mutation proves only one assertion.
+- Guard against false-green tests: an assertion must not already be satisfied by
+  the fixture or initial UI state, and each independent critical assertion must
+  be observed failing under its own targeted mutation.
 - A wrapper, scheduler, retry loop, batch loop, daemon, or exception-catching
   path must have a production-shaped smoke test that exercises the complete call
   chain. Test count and direct unit calls are not substitutes.
@@ -120,6 +139,10 @@ constraints have one project-level source of truth.
   affected suite and `scripts/check.sh`. Read and report the gate's own exit
   status. If prerequisites prevent the gate from running, report the exact gap
   and do not claim completion.
+- Gate self-tests protect against accidental weakening, not every deliberate
+  bypass. Enforce intentional tampering through repository permissions, branch
+  protection, required checks, and review; do not build an endless adversarial
+  test matrix for mechanisms those controls already own.
 - For macOS release work, also build the production Tauri application, verify the
   `.app` signature and DMG image, install only with explicit authority, and test
   the production-shaped application path. Physical trackpad gestures that cannot
@@ -205,9 +228,11 @@ constraints have one project-level source of truth.
 
 - Keep a new public repository private and empty until the candidate Git tree,
   commit metadata, history, and exact push refspec pass the public release check.
-- Public history uses one sanitized root commit. Private development history,
-  feature branches, tags, `refs/codex/*`, reflogs, and other local refs must never
-  be pushed. Never use `git push --all`, `--mirror`, or an unreviewed tag push.
+- Public history must continue to descend from the one sanitized root commit.
+  Private development history, recovery branches, tags, reflogs, and unreviewed
+  refs must never be pushed. Sanitized `codex/*` branches may be pushed only for
+  pull requests after the exact outbound commits pass the privacy gate. Never use
+  `git push --all`, `--mirror`, or an unreviewed tag push.
 - Public commits use the approved GitHub noreply identity. Real workstation
   email addresses, hostnames, home-directory names, internal repository names,
   customer names, and private infrastructure identifiers are forbidden.
@@ -215,11 +240,11 @@ constraints have one project-level source of truth.
   logs, diagnostics, environment files, credentials, certificates, signing
   material, build outputs, dumps, archives, and unknown binaries are excluded by
   default. Existing application icons are the only approved binary asset family.
-- Before the initial public push, run `scripts/public_release_check.sh`. It must
-  fail closed when Gitleaks is unavailable, any finding is unexplained, history
-  contains more than the sanitized root commit, identity differs from the
-  approved noreply address, or the remote contains a ref other than `main`.
-- Push only the reviewed commit with the explicit `main:refs/heads/main` refspec
-  while the repository is private. Verify the remote through its API and a clean
-  clone before changing visibility. Any failed or ambiguous verification keeps
-  the repository private.
+- Before every public push, run `scripts/public_release_check.sh` and the installed
+  pre-push hooks. They fail closed when Gitleaks is unavailable, a finding is
+  unexplained, history has another root, commit identity is not an approved
+  GitHub noreply identity, or the ref is not `main` or a reviewed `codex/*` PR
+  branch.
+- After the one authorized bootstrap push, update `main` only through pull
+  requests protected by required quality, privacy, and macOS E2E checks. Keep
+  force pushes, branch deletion, tags, and bypass actors disabled at the remote.

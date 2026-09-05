@@ -556,7 +556,7 @@ pub async fn probe_cli(
     }
 }
 
-async fn probe_cli_path(kind: CliKind, path: &Path, timeout: Duration) -> CliProbeReport {
+pub(crate) async fn probe_cli_path(kind: CliKind, path: &Path, timeout: Duration) -> CliProbeReport {
     match read_version(kind, path, timeout).await {
         Ok((resolved, version)) => CliProbeReport {
             kind: kind.command().to_string(),
