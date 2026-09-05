@@ -32,6 +32,7 @@ fn candidates_follow_saved_local_homebrew_usr_and_path_order() {
 #[cfg(unix)]
 #[test]
 fn probes_a_matching_executable_and_rejects_a_fake_kind() {
+    let _guard = super::CLI_TEST_LOCK.lock().unwrap();
     let directory = tempfile::tempdir().unwrap();
     let claude = directory.path().join("claude");
     executable(&claude, "#!/bin/sh\necho '2.1.0 (Claude Code)'\n");
@@ -54,6 +55,7 @@ fn probes_a_matching_executable_and_rejects_a_fake_kind() {
 #[cfg(unix)]
 #[test]
 fn rejects_non_executable_and_times_out() {
+    let _guard = super::CLI_TEST_LOCK.lock().unwrap();
     let directory = tempfile::tempdir().unwrap();
     let codex = directory.path().join("codex");
     fs::write(&codex, "not executable").unwrap();
@@ -138,6 +140,7 @@ fn parses_supported_claude_and_codex_jsonl_events() {
 #[cfg(unix)]
 #[test]
 fn command_environment_is_allowlisted_and_errors_are_redacted() {
+    let _guard = super::CLI_TEST_LOCK.lock().unwrap();
     let output = tauri::async_runtime::block_on(async {
         safe_cli_command(Path::new("/usr/bin/env")).output().await
     })
@@ -183,6 +186,7 @@ fn command_environment_is_allowlisted_and_errors_are_redacted() {
 #[cfg(unix)]
 #[test]
 fn runs_a_version_checked_cli_with_fixed_args_and_stdin() {
+    let _guard = super::CLI_TEST_LOCK.lock().unwrap();
     let directory = tempfile::tempdir().unwrap();
     let claude = directory.path().join("claude");
     let prompt_file = directory.path().join("prompt.txt");
@@ -213,6 +217,7 @@ fn runs_a_version_checked_cli_with_fixed_args_and_stdin() {
 #[cfg(unix)]
 #[test]
 fn timeout_terminates_the_child_before_it_can_finish() {
+    let _guard = super::CLI_TEST_LOCK.lock().unwrap();
     let directory = tempfile::tempdir().unwrap();
     let codex = directory.path().join("codex");
     let marker = directory.path().join("finished.txt");
