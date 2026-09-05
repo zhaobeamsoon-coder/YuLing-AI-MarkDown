@@ -14,14 +14,39 @@ mod workspace;
 pub fn run() {
     use tauri::{Emitter, Manager};
 
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(workspace::WorkspaceState::default())
         .manage(export_paths::ExportState::default())
         .manage(open_files::OpenFileState::default())
-        .manage(ai::AiState::default())
+        .manage(ai::AiState::default());
+
+    #[cfg(feature = "e2e")]
+    let builder = builder
+        .plugin(tauri_plugin_wdio_webdriver::init())
+        .setup(|app| {
+            use std::io;
+            use std::path::PathBuf;
+
+            let workspace = std::env::var("YULING_E2E_WORKSPACE").map(PathBuf::from).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidInput, "YULING_E2E_WORKSPACE is required")
+            })?;
+            if !workspace.join(".yuling-e2e-workspace").is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "E2E workspace marker is missing",
+                )
+                .into());
+            }
+            let state = app.state::<workspace::WorkspaceState>();
+            workspace::authorize_directory(app.handle(), &state, &workspace)
+                .map_err(|error| io::Error::other(error.to_string()))?;
+            Ok(())
+        });
+
+    let app = builder
         .invoke_handler(tauri::generate_handler![
             workspace::authorize_workspace,
             workspace::list_documents,

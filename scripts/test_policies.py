@@ -94,6 +94,29 @@ class ProjectPolicyTests(unittest.TestCase):
         self.assertTrue(any("non-public email" in problem for problem in problems))
         self.assertTrue(any("internal project marker" in problem for problem in problems))
 
+    def test_only_known_public_dependency_email_is_allowed_in_lockfile(self) -> None:
+        repo = self.make_repo()
+        public_dependency_email = "i@" + "izs.me"
+        lockfile = repo / "pnpm-lock.yaml"
+        lockfile.write_text(f"deprecated: contact {public_dependency_email}\n", encoding="utf-8")
+        subprocess.run(["git", "add", "pnpm-lock.yaml"], cwd=repo, check=True)
+        self.assertEqual(privacy_violations(repo), [])
+
+        source = repo / "contact.txt"
+        source.write_text(f"{public_dependency_email}\n", encoding="utf-8")
+        subprocess.run(["git", "add", "contact.txt"], cwd=repo, check=True)
+        self.assertTrue(any("non-public email" in problem for problem in privacy_violations(repo)))
+
+    def test_revision_scans_unicode_paths_without_git_quoting(self) -> None:
+        repo = self.make_repo()
+        fixture = repo / "真实样本.md"
+        fixture.write_text("# 安全样本\n", encoding="utf-8")
+        subprocess.run(["git", "add", fixture.name], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "unicode fixture"], cwd=repo, check=True)
+
+        self.assertEqual(revision_boundary_violations(repo, "HEAD"), [])
+        self.assertEqual(revision_privacy_violations(repo, "HEAD"), [])
+
     def test_public_history_requires_one_sanitized_root_and_noreply_identity(self) -> None:
         expected = "231622334+zhaobeamsoon-coder@users.noreply.github.com"
         repo = self.make_repo(expected, "Zhao Yan")

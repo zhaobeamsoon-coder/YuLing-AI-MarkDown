@@ -99,6 +99,9 @@ export default function App() {
   const recoveryDraft = recoveryDrafts[0] ?? null;
   const [navigatorMode, setNavigatorMode] = useState<"quick" | "search" | null>(null);
   const layout = useRef<WorkspaceLayout>({ version: 2, documents: {}, images: {} });
+  const layoutVersions = useRef<Record<string, number>>({});
+  const persistedLayoutVersions = useRef<Record<string, number>>({});
+  const [layoutRevision, setLayoutRevision] = useState(0);
   const indexTimer = useRef<number | null>(null);
   const librarySignature = useRef("");
   const activeDocument = useMemo(() => tabs.find((tab) => tab.path === activePath) ?? null, [tabs, activePath]);
@@ -342,6 +345,8 @@ export default function App() {
   const updateActiveDocument = (content: string, documentJson: TiptapNode | null) => {
     if (!activePath) return;
     setTabs((current) => current.map((tab) => tab.path === activePath ? { ...tab, content, documentJson } : tab));
+    layoutVersions.current[activePath] = (layoutVersions.current[activePath] ?? 0) + 1;
+    setLayoutRevision((current) => current + 1);
     setStatus("未保存");
   };
 
@@ -391,22 +396,35 @@ export default function App() {
   }, [activePath]);
 
   useEffect(() => {
-    if (!workspace || !activeDocument || activeDocument.content === activeDocument.savedContent || activeDocument.saving) return;
+    if (!workspace || !activeDocument || activeDocument.saving) return;
+    const contentChanged = activeDocument.content !== activeDocument.savedContent;
+    const layoutVersion = layoutVersions.current[activeDocument.path] ?? 0;
+    const layoutChanged = layoutVersion > (persistedLayoutVersions.current[activeDocument.path] ?? 0);
+    if (!contentChanged && !layoutChanged) return;
     const timer = window.setTimeout(async () => {
       const path = activeDocument.path;
       setTabs((current) => current.map((tab) => tab.path === path ? { ...tab, saving: true } : tab));
       setStatus("正在保存…");
       try {
-        const modifiedMs = await writeDocument(path, activeDocument.content, activeDocument.modifiedMs);
-        setTabs((current) => current.map((tab) => tab.path === path ? { ...tab, savedContent: tab.content, modifiedMs, saving: false } : tab));
+        const modifiedMs = contentChanged
+          ? await writeDocument(path, activeDocument.content, activeDocument.modifiedMs)
+          : activeDocument.modifiedMs;
+        setTabs((current) => current.map((tab) => tab.path === path ? {
+          ...tab,
+          savedContent: contentChanged ? tab.content : tab.savedContent,
+          modifiedMs,
+          saving: false,
+        } : tab));
         if (activeDocument.documentJson) {
           layout.current.documents[activeDocument.relativePath] = extractTableLayouts(activeDocument.documentJson);
           layout.current.images[activeDocument.relativePath] = extractImageLayouts(activeDocument.documentJson);
           await saveLayout(workspace, JSON.stringify(layout.current, null, 2));
         }
+        persistedLayoutVersions.current[path] = layoutVersion;
         setStatus("已保存");
-        void reindexWorkspace(workspace);
+        if (contentChanged) void reindexWorkspace(workspace);
       } catch (reason) {
+        persistedLayoutVersions.current[path] = layoutVersion;
         setTabs((current) => current.map((tab) => tab.path === path ? { ...tab, saving: false } : tab));
         const message = String(reason);
         if (message.includes("其他程序修改")) setConflict(path);
@@ -414,7 +432,7 @@ export default function App() {
       }
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [activeDocument, workspace]);
+  }, [activeDocument, layoutRevision, workspace]);
 
   useEffect(() => {
     if (!activeDocument) return;

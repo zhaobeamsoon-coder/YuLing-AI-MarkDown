@@ -12,19 +12,27 @@ function isMarkdownPath(path: string): boolean {
   return path.endsWith(".md");
 }
 
+function looksLikeDirectoryPath(path: string): boolean {
+  const name = path.replaceAll("\\", "/").split("/").at(-1) ?? "";
+  return name.length > 0 && !name.includes(".");
+}
+
 export function shouldRefreshWorkspaceLibrary(event: Pick<WatchEvent, "type" | "paths">): boolean {
   const paths = event.paths.filter((path) => !isInternalPath(path));
   if (paths.length === 0 || typeof event.type === "string") {
-    return event.type === "any" && paths.some(isMarkdownPath);
+    return event.type === "any" && paths.some((path) => isMarkdownPath(path) || looksLikeDirectoryPath(path));
   }
   if ("create" in event.type) {
-    return event.type.create.kind === "folder" || paths.some(isMarkdownPath);
+    return event.type.create.kind === "folder" || paths.some((path) => isMarkdownPath(path) || looksLikeDirectoryPath(path));
   }
   if ("remove" in event.type) {
-    return event.type.remove.kind === "folder" || paths.some(isMarkdownPath);
+    return event.type.remove.kind === "folder" || paths.some((path) => isMarkdownPath(path) || looksLikeDirectoryPath(path));
   }
   if ("modify" in event.type && event.type.modify.kind === "rename") {
     return true;
+  }
+  if ("modify" in event.type && event.type.modify.kind !== "data") {
+    return paths.some(looksLikeDirectoryPath);
   }
   return false;
 }

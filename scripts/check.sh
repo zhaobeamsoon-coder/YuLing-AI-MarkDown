@@ -6,6 +6,7 @@ cd "$repo_root"
 
 python3 tools/repository_boundary_check.py
 python3 scripts/test_policies.py
+python3 scripts/test_e2e_boundary.py
 
 if [ -f package.json ]; then
   pnpm lint
