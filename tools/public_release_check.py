@@ -29,6 +29,8 @@ APPROVED_COMMIT_IDENTITIES = {
 ALLOWED_GITHUB_COMMITTERS = {EXPECTED_EMAIL, APPROVED_PUBLIC_EMAIL, "noreply@github.com"}
 ALLOWED_EMAIL_SUFFIXES = ("@example.com", "@yuling.invalid", "@users.noreply.github.com")
 ALLOWED_ASSET_EMAIL_SUFFIXES = ("@1x.png", "@2x.png", "@3x.png")
+ALLOWED_DEPENDENCY_EMAILS = {"i@" + "izs.me"}
+DEPENDENCY_LOCKFILES = {"pnpm-lock.yaml"}
 ALLOWED_HOME_NAMES = {"test", "tester", "example", "user"}
 INTERNAL_MARKERS = {"sl" + "-project"}
 EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -41,8 +43,12 @@ SECRET_PATTERNS = (
 )
 
 
-def email_is_allowed(email: str) -> bool:
+def email_is_allowed(email: str, relative: pathlib.Path | str | None = None) -> bool:
     normalized = email.lower()
+    if relative is not None:
+        path = pathlib.Path(relative)
+        if path.name in DEPENDENCY_LOCKFILES and normalized in ALLOWED_DEPENDENCY_EMAILS:
+            return True
     return normalized in {APPROVED_PUBLIC_EMAIL, "noreply@github.com"} or normalized.endswith(
         (*ALLOWED_EMAIL_SUFFIXES, *ALLOWED_ASSET_EMAIL_SUFFIXES)
     )
@@ -69,7 +75,7 @@ def privacy_violations(root: pathlib.Path) -> list[str]:
                 if match.group(1).lower() not in ALLOWED_HOME_NAMES:
                     problems.append(f"personal home path: {relative}:{line_number}")
             for email in EMAIL_PATTERN.findall(line):
-                if not email_is_allowed(email):
+                if not email_is_allowed(email, relative):
                     problems.append(f"non-public email: {relative}:{line_number}")
             if any(marker in line.lower() for marker in INTERNAL_MARKERS):
                 problems.append(f"internal project marker: {relative}:{line_number}")
@@ -81,7 +87,7 @@ def privacy_violations(root: pathlib.Path) -> list[str]:
 def revision_files(root: pathlib.Path, revision: str) -> list[str]:
     return [
         path
-        for path in git_output(root, "ls-tree", "-r", "--name-only", revision).splitlines()
+        for path in git_output(root, "ls-tree", "-rz", "--name-only", revision).split("\0")
         if path
     ]
 
@@ -131,7 +137,7 @@ def revision_privacy_violations(root: pathlib.Path, revision: str) -> list[str]:
                 if match.group(1).lower() not in ALLOWED_HOME_NAMES:
                     problems.append(f"personal home path: {relative}:{line_number}")
             for email in EMAIL_PATTERN.findall(line):
-                if not email_is_allowed(email):
+                if not email_is_allowed(email, relative):
                     problems.append(f"non-public email: {relative}:{line_number}")
             if any(marker in line.lower() for marker in INTERNAL_MARKERS):
                 problems.append(f"internal project marker: {relative}:{line_number}")

@@ -1,6 +1,9 @@
 allowBuilds:
   core-js: false
+  edgedriver: false
   es5-ext: false
+  esbuild: true
+  geckodriver: false
 minimumReleaseAgeExclude:
   - '@tiptap/core@3.30.3'
   - '@tiptap/extension-blockquote@3.30.3'

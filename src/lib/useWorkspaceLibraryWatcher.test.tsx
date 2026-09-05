@@ -33,9 +33,14 @@ afterEach(() => {
 describe("workspace library watcher", () => {
   it("accepts Markdown and folder structure events but ignores unrelated changes", () => {
     expect(shouldRefreshWorkspaceLibrary({ type: { create: { kind: "file" } }, paths: ["/资料/子目录/新文档.md"] })).toBe(true);
+    expect(shouldRefreshWorkspaceLibrary({ type: { create: { kind: "any" } }, paths: ["/资料/新目录"] })).toBe(true);
     expect(shouldRefreshWorkspaceLibrary({ type: { remove: { kind: "folder" } }, paths: ["/资料/旧目录"] })).toBe(true);
+    expect(shouldRefreshWorkspaceLibrary({ type: { remove: { kind: "any" } }, paths: ["/资料/刚删除的目录"] })).toBe(true);
+    expect(shouldRefreshWorkspaceLibrary({ type: "any", paths: ["/资料/刚删除的目录"] })).toBe(true);
     expect(shouldRefreshWorkspaceLibrary({ type: { modify: { kind: "rename", mode: "both" } }, paths: ["/资料/旧.md", "/资料/新.md"] })).toBe(true);
+    expect(shouldRefreshWorkspaceLibrary({ type: { modify: { kind: "metadata", mode: "any" } }, paths: ["/资料"] })).toBe(true);
     expect(shouldRefreshWorkspaceLibrary({ type: { modify: { kind: "data", mode: "content" } }, paths: ["/资料/图片.png"] })).toBe(false);
+    expect(shouldRefreshWorkspaceLibrary({ type: "any", paths: ["/资料/普通文件.txt"] })).toBe(false);
     expect(shouldRefreshWorkspaceLibrary({ type: { access: { kind: "open", mode: "read" } }, paths: ["/资料/新文档.md"] })).toBe(false);
     expect(shouldRefreshWorkspaceLibrary({ type: { create: { kind: "file" } }, paths: ["/资料/.yulingmd/cache.md"] })).toBe(false);
   });
