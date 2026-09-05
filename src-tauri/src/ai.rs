@@ -570,6 +570,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn checks_a_cli_version_without_starting_a_model_request() {
+        let _guard = crate::ai_cli::CLI_TEST_LOCK.lock().unwrap();
         let directory = tempfile::tempdir().unwrap();
         let codex = directory.path().join("codex");
         executable(

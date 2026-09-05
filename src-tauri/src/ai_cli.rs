@@ -14,6 +14,9 @@ const VERSION_OUTPUT_LIMIT: usize = 4096;
 const STDERR_LIMIT: usize = 8192;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
+#[cfg(test)]
+pub(crate) static CLI_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CliKind {
     Claude,
